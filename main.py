@@ -25,6 +25,7 @@ DB_PATH = config_ini.get('DEFAULT', 'db_path', fallback='songs.db')
 song_ids_str = config_ini.get('DEFAULT', 'song_ids', fallback=None)
 SONG_IDS = [int(s.strip()) for s in song_ids_str.split(',')] if song_ids_str else None
 BOT_TOKEN = config_ini.get('DEFAULT', 'bot_token')
+ROUNDS = config_ini.getint('DEFAULT', 'rounds', fallback=5)
 
 @bot.command()
 async def start_introdon(ctx):
@@ -39,7 +40,7 @@ async def start_introdon(ctx):
         "answering_lock": True,  # 最初はロック
         "question_sent": False
     }
-    await ctx.send("イントロドンを開始します！/show_question で1問目を出題してください。")
+    await ctx.send("イントロドンを開始します!\n/show_question で1問目を出題してください。")
 
 @bot.command()
 async def show_question(ctx):
@@ -48,18 +49,15 @@ async def show_question(ctx):
         await ctx.send("現在アクティブなゲームはありません。/start_introdon で開始してください。")
         return
     game_state = active_games[guild_id]
-    # ラウンド数を進める
-    game_state["round"] += 1
-    if game_state["round"] > 5:
+    if game_state["round"] >= ROUNDS:
         await end_game(ctx)
         return
-    # 問題準備
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         song_info = None
-        if SONG_IDS and len(SONG_IDS) >= game_state["round"]:
-            song_id = SONG_IDS[game_state["round"]-1]
+        if SONG_IDS and len(SONG_IDS) > game_state["round"]:
+            song_id = SONG_IDS[game_state["round"]]
             cursor.execute("SELECT id, title, artist, path FROM songs WHERE id = ?", (song_id,))
             song_info = cursor.fetchone()
         else:
@@ -76,8 +74,7 @@ async def show_question(ctx):
         game_state["file_path"] = file_path
         game_state["answered_users"] = []
         game_state["question_sent"] = False
-        # 正解指定があればそれを使う
-        answer_key = f"answer_{game_state['round']}"
+        answer_key = f"answer_{game_state['round']+1}"
         if config_ini.has_option('DEFAULT', answer_key):
             game_state["correct_answer_title"] = config_ini.get('DEFAULT', answer_key).strip()
         else:
@@ -89,17 +86,14 @@ async def show_question(ctx):
         del active_games[guild_id]
         return
     conn.close()
-    await ctx.send(f"**--- 第{game_state['round']}ラウンド ---**")
-    # 音声ファイル送信
+    await ctx.send(f"**--- 第{game_state['round']+1}ラウンド ---**")
     try:
-        await ctx.send(file=discord.File(game_state["file_path"]))
         await ctx.send("⬆️ イントロを送信しました！曲名は何でしょう？")
     except Exception as e:
         await ctx.send(f"ファイル送信エラー: {e}")
         game_state["current_song_id"] = None
         return
-    # 選択肢生成
-    choices_key = f"choices_{game_state['round']}"
+    choices_key = f"choices_{game_state['round']+1}"
     if config_ini.has_option('DEFAULT', choices_key):
         options = [s.strip() for s in config_ini.get('DEFAULT', choices_key).split(',')]
     else:
@@ -118,21 +112,22 @@ async def show_question(ctx):
     await ctx.send("選択肢を選んでください:", view=view)
     game_state["answering_lock"] = False
     game_state["question_sent"] = True
-    # タイマー開始
     async def timer_and_close():
         await asyncio.sleep(15)
         game_state["answering_lock"] = True
         await announce_round_results(ctx, game_state)
-        if game_state["round"] < 5:
+        if game_state["round"] >= ROUNDS:
+            await end_game(ctx)
+        else:
             await ctx.send("/show_question で次の問題を出題してください。")
     asyncio.create_task(timer_and_close())
+    game_state["round"] += 1
 
 def generate_options(correct_answer: str):
     options = [correct_answer]
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        # 他の楽曲からランダムに3つ選択
         cursor.execute("SELECT title FROM songs WHERE title != ? ORDER BY RANDOM() LIMIT 3", (correct_answer,))
         for row in cursor.fetchall():
             options.append(row[0])
@@ -142,14 +137,14 @@ def generate_options(correct_answer: str):
             conn.close()
         raise e
     import random
-    random.shuffle(options) # 選択肢をシャッフル
+    random.shuffle(options)
     return options
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
-    if interaction.type == discord.InteractionType.component:
-        custom_id = interaction.custom_id
-        if custom_id.startswith("introdon_answer_"):
+    if interaction.type.name == "component":
+        custom_id = interaction.data.get('custom_id')
+        if custom_id and custom_id.startswith("introdon_answer_"):
             guild_id = interaction.guild.id
             if guild_id not in active_games or active_games[guild_id]["answering_lock"]:
                 await interaction.response.send_message("回答期間は終了しました。", ephemeral=True)
@@ -162,10 +157,13 @@ async def on_interaction(interaction: discord.Interaction):
             correct_title = active_games[guild_id]["correct_answer_title"]
             user_id = interaction.user.id
 
-            active_games[guild_id]["answered_users"].append(user_id) # 回答済みとしてマーク
+            if user_id not in active_games[guild_id]["scores"]:
+                active_games[guild_id]["scores"][user_id] = 0
+
+            active_games[guild_id]["answered_users"].append(user_id)
 
             if selected_answer == correct_title:
-                active_games[guild_id]["scores"][user_id] += 1 # 正解なら1点加算
+                active_games[guild_id]["scores"][user_id] += 1
                 await interaction.response.send_message("正解！", ephemeral=True)
             else:
                 await interaction.response.send_message("残念、不正解。", ephemeral=True)
@@ -175,12 +173,11 @@ async def announce_round_results(ctx, game_state):
     correct_title = game_state["correct_answer_title"]
     await ctx.send(f"正解は「{correct_title}」でした！")
 
-    # 現在のスコアボードを表示
     sorted_scores = sorted(game_state["scores"].items(), key=lambda item: item[1], reverse=True)
     scoreboard_msg = "**--- 現在のスコア ---**\n"
     for user_id, score in sorted_scores:
         try:
-            user = await bot.fetch_user(user_id) # ユーザー名を取得
+            user = await bot.fetch_user(user_id)
             scoreboard_msg += f"{user.display_name}: {score}点\n"
         except Exception:
             scoreboard_msg += f"ユーザーID:{user_id}: {score}点\n"
@@ -208,7 +205,7 @@ async def end_game(ctx):
             prev_score = score
     await ctx.send(ranking_msg)
 
-    del active_games[guild_id] # ゲーム状態をクリア
+    del active_games[guild_id]
 
 if __name__ == '__main__':
     bot.run(BOT_TOKEN)
