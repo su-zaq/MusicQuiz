@@ -34,7 +34,7 @@ Music_quizは、Discordサーバー上で楽曲クイズを開催できるプロ
 - メッセージ履歴の閲覧（Read Message History）
 - ファイルの添付（Attach Files）
 - スラッシュコマンドの利用（Use Slash Commands）
-→ Permissions Interger = 2147593216（上記の権限をまとめたもの）
+- → Permissions Interger = 2147593216（上記の権限をまとめたもの）
 
 ## 使い方
 
