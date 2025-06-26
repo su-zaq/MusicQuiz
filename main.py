@@ -184,11 +184,7 @@ async def on_interaction(interaction: discord.Interaction):
                 await interaction.response.send_message("回答済み", ephemeral=True)
 
 
-async def announce_round_results(ctx, game_state):
-    correct_title = game_state["correct_answer_title"]
-    await ctx.send(f"正解は「{correct_title}」でした！")
-
-def log_score(guild_id, sorted_scores, ended=False, round_num=None):
+async def log_score(ctx, guild_id, sorted_scores, ended=False, round_num=None):
     import datetime
     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     with open(LOG_PATH, 'a', encoding='utf-8') as f:
@@ -197,11 +193,15 @@ def log_score(guild_id, sorted_scores, ended=False, round_num=None):
             f.write(f' 第{round_num}問')
         f.write('\n')
         for i, (user_id, score) in enumerate(sorted_scores, 1):
-            try:
-                user = asyncio.get_event_loop().run_until_complete(bot.fetch_user(user_id))
-                name = user.display_name
-            except Exception:
-                name = f"ユーザーID:{user_id}"
+            member = ctx.guild.get_member(user_id)
+            if member:
+                name = member.display_name
+            else:
+                try:
+                    user = await bot.fetch_user(user_id)
+                    name = user.name
+                except Exception:
+                    name = f"ユーザーID:{user_id}"
             f.write(f'{i}位: {name} ({score}点)\n')
         f.write('\n')
         f.write('--------------------------------\n')
@@ -230,7 +230,7 @@ async def score(ctx):
                 ranking_msg += f"{rank}位: ユーザーID:{user_id} ({score}点)\n"
                 prev_score = score
         await ctx.send(ranking_msg)
-        log_score(guild_id, sorted_scores, ended=True, round_num=round_num)
+        await log_score(ctx, guild_id, sorted_scores, ended=True, round_num=round_num)
         del active_games[guild_id]
     else:
         scoreboard_msg = "**--- 現在のスコア ---**\n"
@@ -241,7 +241,7 @@ async def score(ctx):
             except Exception:
                 scoreboard_msg += f"ユーザーID:{user_id}: {score}点\n"
         await ctx.send(scoreboard_msg)
-        log_score(guild_id, sorted_scores, ended=False, round_num=round_num)
+        await log_score(ctx, guild_id, sorted_scores, ended=False, round_num=round_num)
 
 async def end_game(ctx):
     guild_id = ctx.guild.id
@@ -251,6 +251,13 @@ async def end_game(ctx):
     await ctx.send("/score で最終順位を確認できます。")
     game_state["game_ended"] = True  # 終了フラグを立てる
     # 最終順位の送信やactive_gamesからの削除は/scoreで行う
+
+async def announce_round_results(ctx, game_state):
+    correct_title = game_state["correct_answer_title"]
+    await ctx.send(f"正解は「{correct_title}」でした！")
+    sorted_scores = sorted(game_state["scores"].items(), key=lambda item: item[1], reverse=True)
+    round_num = game_state["round"]
+    await log_score(ctx, ctx.guild.id, sorted_scores, ended=False, round_num=round_num)
 
 if __name__ == '__main__':
     bot.run(BOT_TOKEN)
