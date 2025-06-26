@@ -194,3 +194,4 @@ cython_debug/
 .cursorindexingignore
 
 test.ini
+log_event.txt

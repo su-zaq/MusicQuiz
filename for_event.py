@@ -7,13 +7,6 @@ import argparse
 
 
 """
- このプログラムはDiscordのボットとして動作し、イントロクイズ（イントロドン）を実施するためのものです。
- 設定ファイル（.ini）から楽曲データベースのパスや出題する楽曲ID、ラウンド数、ボットのトークンなどを読み込みます。
- ユーザーはDiscord上でコマンド（/start, /next など）を使ってゲームを開始・進行できます。
- 各ラウンドごとに楽曲の選択肢が提示され、ユーザーはボタンで回答します。
- 正解・不正解の判定、スコア管理、最終順位の発表なども自動で行われます。
- 実行は以下のコマンドで行います。
- python main.py --config iniファイルのパス
 """
 
 # discord.py 2.0以降が必要
@@ -37,6 +30,8 @@ song_ids_str = config_ini.get('DEFAULT', 'song_ids', fallback=None)
 SONG_IDS = [int(s.strip()) for s in song_ids_str.split(',')] if song_ids_str else None
 BOT_TOKEN = config_ini.get('DEFAULT', 'bot_token')
 ROUNDS = config_ini.getint('DEFAULT', 'rounds', fallback=5)
+LOG_PATH = config_ini.get('DEFAULT', 'log_path', fallback='score_log.txt')
+ANSWER_SECONDS = config_ini.getint('DEFAULT', 'answer_seconds', fallback=15)
 
 @bot.command()
 async def start(ctx):
@@ -98,12 +93,19 @@ async def next(ctx):
         return
     conn.close()
     await ctx.send(f"**--- 第{game_state['round']+1}ラウンド ---**")
+    # 音声ファイル送信
     try:
-        await ctx.send("⬆️ イントロを送信しました！曲名は何でしょう？")
+        await ctx.send(file=discord.File(game_state["file_path"], filename="secret.mp3"))
     except Exception as e:
-        await ctx.send(f"ファイル送信エラー: {e}")
+        await ctx.send(f"音声ファイル送信エラー: {e}")
         game_state["current_song_id"] = None
         return
+    question_key = f"question_{game_state['round']+1}"
+    if config_ini.has_option('DEFAULT', question_key):
+        question_text = config_ini.get('DEFAULT', question_key)
+        await ctx.send(question_text)
+    else:
+        await ctx.send("⬆️ 曲名は何でしょう？")
     choices_key = f"choices_{game_state['round']+1}"
     if config_ini.has_option('DEFAULT', choices_key):
         options = [s.strip() for s in config_ini.get('DEFAULT', choices_key).split(',')]
@@ -124,7 +126,7 @@ async def next(ctx):
     game_state["answering_lock"] = False
     game_state["question_sent"] = True
     async def timer_and_close():
-        await asyncio.sleep(15)
+        await asyncio.sleep(ANSWER_SECONDS)
         game_state["answering_lock"] = True
         await announce_round_results(ctx, game_state)
         if game_state["round"] >= ROUNDS:
@@ -175,48 +177,80 @@ async def on_interaction(interaction: discord.Interaction):
 
             if selected_answer == correct_title:
                 active_games[guild_id]["scores"][user_id] += 1
-                await interaction.response.send_message("正解！", ephemeral=True)
+                # await interaction.response.send_message("正解！", ephemeral=True)
+                await interaction.response.send_message("回答済み", ephemeral=True)
             else:
-                await interaction.response.send_message("残念、不正解。", ephemeral=True)
+                # await interaction.response.send_message("残念、不正解。", ephemeral=True)
+                await interaction.response.send_message("回答済み", ephemeral=True)
 
 
 async def announce_round_results(ctx, game_state):
     correct_title = game_state["correct_answer_title"]
     await ctx.send(f"正解は「{correct_title}」でした！")
 
+def log_score(guild_id, sorted_scores, ended=False, round_num=None):
+    import datetime
+    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with open(LOG_PATH, 'a', encoding='utf-8') as f:
+        f.write(f'[{now}] guild_id={guild_id} {"最終結果" if ended else "途中経過"}')
+        if round_num is not None:
+            f.write(f' 第{round_num}問')
+        f.write('\n')
+        for i, (user_id, score) in enumerate(sorted_scores, 1):
+            try:
+                user = asyncio.get_event_loop().run_until_complete(bot.fetch_user(user_id))
+                name = user.display_name
+            except Exception:
+                name = f"ユーザーID:{user_id}"
+            f.write(f'{i}位: {name} ({score}点)\n')
+        f.write('\n')
+        f.write('--------------------------------\n')
+
+@bot.command()
+async def score(ctx):
+    guild_id = ctx.guild.id
+    if guild_id not in active_games:
+        await ctx.send("現在アクティブなゲームはありません。/start で開始してください。")
+        return
+    game_state = active_games[guild_id]
     sorted_scores = sorted(game_state["scores"].items(), key=lambda item: item[1], reverse=True)
-    scoreboard_msg = "**--- 現在のスコア ---**\n"
-    for user_id, score in sorted_scores:
-        try:
-            user = await bot.fetch_user(user_id)
-            scoreboard_msg += f"{user.display_name}: {score}点\n"
-        except Exception:
-            scoreboard_msg += f"ユーザーID:{user_id}: {score}点\n"
-    await ctx.send(scoreboard_msg)
+    round_num = game_state["round"]
+    if game_state.get("game_ended"):
+        ranking_msg = "**--- 最終順位 ---**\n"
+        rank = 1
+        prev_score = -1
+        for i, (user_id, score) in enumerate(sorted_scores):
+            try:
+                user = await bot.fetch_user(user_id)
+                if score < prev_score:
+                    rank = i + 1
+                ranking_msg += f"{rank}位: {user.display_name} ({score}点)\n"
+                prev_score = score
+            except Exception:
+                ranking_msg += f"{rank}位: ユーザーID:{user_id} ({score}点)\n"
+                prev_score = score
+        await ctx.send(ranking_msg)
+        log_score(guild_id, sorted_scores, ended=True, round_num=round_num)
+        del active_games[guild_id]
+    else:
+        scoreboard_msg = "**--- 現在のスコア ---**\n"
+        for user_id, score in sorted_scores:
+            try:
+                user = await bot.fetch_user(user_id)
+                scoreboard_msg += f"{user.display_name}: {score}点\n"
+            except Exception:
+                scoreboard_msg += f"ユーザーID:{user_id}: {score}点\n"
+        await ctx.send(scoreboard_msg)
+        log_score(guild_id, sorted_scores, ended=False, round_num=round_num)
 
 async def end_game(ctx):
     guild_id = ctx.guild.id
     game_state = active_games[guild_id]
 
     await ctx.send("**--- イントロドン終了！ ---**")
-    final_scores = sorted(game_state["scores"].items(), key=lambda item: item[1], reverse=True)
-
-    ranking_msg = "**--- 最終順位 ---**\n"
-    rank = 1
-    prev_score = -1
-    for i, (user_id, score) in enumerate(final_scores):
-        try:
-            user = await bot.fetch_user(user_id)
-            if score < prev_score:
-                rank = i + 1
-            ranking_msg += f"{rank}位: {user.display_name} ({score}点)\n"
-            prev_score = score
-        except Exception:
-            ranking_msg += f"{rank}位: ユーザーID:{user_id} ({score}点)\n"
-            prev_score = score
-    await ctx.send(ranking_msg)
-
-    del active_games[guild_id]
+    await ctx.send("/score で最終順位を確認できます。")
+    game_state["game_ended"] = True  # 終了フラグを立てる
+    # 最終順位の送信やactive_gamesからの削除は/scoreで行う
 
 if __name__ == '__main__':
     bot.run(BOT_TOKEN)
