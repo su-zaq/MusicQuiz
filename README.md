@@ -46,7 +46,7 @@ answer_seconds = 30
 
 ### 3. チャンネル・サーバー分離機能
 
-このボットでは、ゲーム用とコマンド用を完全に分離できます：
+このボットでは、ゲーム用とコマンド用でチャンネルを分離しています：
 
 #### 3-1. 同一サーバー内での分離
 - **ゲーム用チャンネル**: クイズの出題、音声ファイル、選択肢ボタン、結果表示
@@ -59,7 +59,7 @@ answer_seconds = 30
 設定方法：
 1. **同一サーバー**: `game_channel_id`と`command_channel_id`のみ設定
 2. **別サーバー**: `game_guild_id`、`command_guild_id`、`game_channel_id`、`command_channel_id`を全て設定
-3. 設定しない場合は、従来通り同じチャンネルで全ての機能が動作
+3. 設定しない場合は、同じチャンネルで全ての機能が動作
 
 ### 4. コマンド
 
@@ -76,7 +76,7 @@ answer_seconds = 30
 
 ```bash
 pip install -r requirements.txt
-python main.py
+python main.py --config configファイルのパス
 ```
 
 ## 注意事項
