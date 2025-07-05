@@ -6,7 +6,7 @@ import datetime
 import random
 
 class GameManager:
-    def __init__(self, bot, config_ini, db_path, log_path, rounds, song_ids, answer_seconds):
+    def __init__(self, bot, config_ini, db_path, log_path, rounds, song_ids, answer_seconds, command_handler=None):
         self.bot = bot
         self.config_ini = config_ini
         self.db_path = db_path
@@ -15,6 +15,7 @@ class GameManager:
         self.song_ids = song_ids
         self.answer_seconds = answer_seconds
         self.active_games = {}  # {game_guild_id: {...}}
+        self.command_handler = command_handler
     
     def get_game_guild_id(self, game_guild_id):
         """ゲームサーバーIDを取得（設定されていない場合はNone）"""
@@ -129,11 +130,15 @@ class GameManager:
         view = discord.ui.View()
         for button in buttons:
             view.add_item(button)
-        await game_channel.send("選択肢を選んでください:", view=view)
+        await game_channel.send("選択肢を選んでね！:", view=view)
 
         # 回答受付開始
         game_state["answering_lock"] = False
         game_state["question_sent"] = True
+
+        # コマンドボタンを無効化
+        if self.command_handler:
+            await self.command_handler.update_command_buttons(game_guild_id)
 
         # 回答時間終了後の処理
         async def timer_and_close():
@@ -145,6 +150,10 @@ class GameManager:
                 game_state["game_ended"] = True
             else:
                 await game_channel.send("回答終了！！！")
+            
+            # 回答終了後にコマンドボタンを再有効化
+            if self.command_handler:
+                await self.command_handler.update_command_buttons(game_guild_id)
         
         asyncio.create_task(timer_and_close())
         game_state["round"] += 1
@@ -178,7 +187,36 @@ class GameManager:
         """ゲーム状態を取得"""
         return self.active_games.get(guild_id)
     
+    def is_question_active(self, guild_id):
+        """問題が出題中かどうかを判定"""
+        game_state = self.get_game_state(guild_id)
+        if not game_state:
+            return False
+        return game_state.get("question_sent", False) and not game_state.get("answering_lock", True)
+    
+    def is_waiting_for_answer(self, guild_id):
+        """回答時間終了後で正解未発表の状態かどうかを判定"""
+        game_state = self.get_game_state(guild_id)
+        if not game_state:
+            return False
+        # 問題が出題済みで、回答がロックされている（回答時間終了）状態
+        return game_state.get("question_sent", False) and game_state.get("answering_lock", True) and game_state.get("current_song_id") is not None
+    
+    def is_game_active(self, guild_id):
+        """ゲームが進行中かどうかを判定"""
+        game_state = self.get_game_state(guild_id)
+        if not game_state:
+            return False
+        # ゲームが終了している場合はFalse
+        if game_state.get("game_ended", False):
+            return False
+        # ゲームが開始されている場合はTrue
+        return True
+    
     def end_game(self, guild_id):
         """ゲーム終了"""
         if guild_id in self.active_games:
-            del self.active_games[guild_id] 
+            del self.active_games[guild_id]
+            # ゲーム終了時にコマンドボタンを更新
+            if self.command_handler:
+                asyncio.create_task(self.command_handler.update_command_buttons(guild_id)) 

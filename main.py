@@ -39,6 +39,9 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 game_manager = GameManager(bot, config_ini, DB_PATH, LOG_PATH, ROUNDS, SONG_IDS, ANSWER_SECONDS)
 command_handler = CommandHandler(bot, game_manager, GAME_GUILD_ID, COMMAND_GUILD_ID, GAME_CHANNEL_ID, COMMAND_CHANNEL_ID)
 
+# GameManagerにCommandHandlerの参照を設定
+game_manager.command_handler = command_handler
+
 # コマンド定義
 @bot.command()
 async def start(ctx):
@@ -74,11 +77,28 @@ async def on_interaction(interaction: discord.Interaction):
                 await interaction.response.send_message("このチャンネルではコマンドを実行できません。", ephemeral=True)
                 return
             
+            # 問題出題中かどうかをチェック
+            game_guild_id = GAME_GUILD_ID or interaction.guild.id
+            if game_manager.is_question_active(game_guild_id):
+                await interaction.response.send_message("現在問題が出題中です。回答時間が終了するまでお待ちください。", ephemeral=True)
+                return
+            
+            # 回答時間終了後で正解未発表の状態かどうかをチェック
+            if game_manager.is_waiting_for_answer(game_guild_id):
+                await interaction.response.send_message("回答時間が終了しました。正解を発表してから次の問題を出題してください。", ephemeral=True)
+                return
+            
             # コマンドの実行
             command = custom_id.replace("cmd_", "")
             if command == "start":
                 # ゲーム開始処理
                 game_guild_id = GAME_GUILD_ID or interaction.guild.id
+                
+                # ゲーム進行中かどうかをチェック
+                if game_manager.is_game_active(game_guild_id):
+                    await interaction.response.send_message("現在ゲームが進行中です。ラウンドが終了するまでお待ちください。", ephemeral=True)
+                    return
+                
                 if game_manager.get_game_state(game_guild_id) and game_manager.get_game_state(game_guild_id)["current_song_id"] is not None:
                     await interaction.response.send_message("現在、クイズが進行中です。", ephemeral=True)
                     return
@@ -159,6 +179,10 @@ async def on_interaction(interaction: discord.Interaction):
                 game_channel = game_guild.get_channel(GAME_CHANNEL_ID) if GAME_CHANNEL_ID else interaction.channel
                 if game_channel:
                     await game_channel.send(answer_msg)
+                
+                # 正解発表後にゲーム状態を更新（次の問題の準備）
+                game_state["current_song_id"] = None
+                game_state["question_sent"] = False
                 
                 await interaction.response.send_message("正解をゲームチャンネルに送信しました。", ephemeral=True, delete_after=5.0)
                 

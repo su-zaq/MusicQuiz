@@ -66,6 +66,45 @@ class CommandHandler:
             view.add_item(button)
         return view
     
+    def create_command_buttons_disabled(self):
+        """問題出題中に無効化されたコマンド用のボタンを作成"""
+        buttons = [
+            discord.ui.Button(label="開始", style=discord.ButtonStyle.success, custom_id="cmd_start", disabled=True),
+            discord.ui.Button(label="出題", style=discord.ButtonStyle.primary, custom_id="cmd_next", disabled=True),
+            discord.ui.Button(label="正解", style=discord.ButtonStyle.secondary, custom_id="cmd_answer", disabled=True),
+            discord.ui.Button(label="スコア", style=discord.ButtonStyle.danger, custom_id="cmd_score", disabled=True)
+        ]
+        view = discord.ui.View()
+        for button in buttons:
+            view.add_item(button)
+        return view
+    
+    def create_command_buttons_game_active(self):
+        """ゲーム進行中に開始ボタンのみ無効化されたコマンド用のボタンを作成"""
+        buttons = [
+            discord.ui.Button(label="開始", style=discord.ButtonStyle.success, custom_id="cmd_start", disabled=True),
+            discord.ui.Button(label="出題", style=discord.ButtonStyle.primary, custom_id="cmd_next"),
+            discord.ui.Button(label="正解", style=discord.ButtonStyle.secondary, custom_id="cmd_answer"),
+            discord.ui.Button(label="スコア", style=discord.ButtonStyle.danger, custom_id="cmd_score")
+        ]
+        view = discord.ui.View()
+        for button in buttons:
+            view.add_item(button)
+        return view
+    
+    def create_command_buttons_waiting_answer(self):
+        """回答時間終了後で正解未発表の状態に応じたコマンド用のボタンを作成"""
+        buttons = [
+            discord.ui.Button(label="開始", style=discord.ButtonStyle.success, custom_id="cmd_start", disabled=True),
+            discord.ui.Button(label="出題", style=discord.ButtonStyle.primary, custom_id="cmd_next", disabled=True),
+            discord.ui.Button(label="正解", style=discord.ButtonStyle.secondary, custom_id="cmd_answer"),
+            discord.ui.Button(label="スコア", style=discord.ButtonStyle.danger, custom_id="cmd_score")
+        ]
+        view = discord.ui.View()
+        for button in buttons:
+            view.add_item(button)
+        return view
+    
     async def handle_start_command(self, ctx):
         """/startコマンドの処理"""
         # コマンドサーバー権限チェック
@@ -78,6 +117,11 @@ class CommandHandler:
         
         # ゲームサーバーIDを取得
         game_guild_id = self.game_guild_id or ctx.guild.id
+        
+        # ゲーム進行中かどうかをチェック
+        if self.game_manager.is_game_active(game_guild_id):
+            await ctx.send("現在ゲームが進行中です。ラウンドが終了するまでお待ちください。", delete_after=5.0)
+            return
         
         # すでにゲームが進行中なら拒否
         if self.game_manager.get_game_state(game_guild_id) and self.game_manager.get_game_state(game_guild_id)["current_song_id"] is not None:
@@ -110,6 +154,9 @@ class CommandHandler:
             await ctx.message.delete()
         except:
             pass  # 削除できない場合は無視
+        
+        # コマンドボタンを更新
+        await self.update_command_buttons(ctx.guild.id)
     
     async def handle_next_command(self, ctx):
         """/nextコマンドの処理"""
@@ -123,6 +170,11 @@ class CommandHandler:
         
         # ゲームサーバーIDを取得
         game_guild_id = self.game_guild_id or ctx.guild.id
+        
+        # 回答時間終了後で正解未発表の状態かどうかをチェック
+        if self.game_manager.is_waiting_for_answer(game_guild_id):
+            await ctx.send("回答時間が終了しました。正解を発表してから次の問題を出題してください。", delete_after=5.0)
+            return
         
         if not self.game_manager.get_game_state(game_guild_id):
             await ctx.send("現在アクティブなゲームはありません。/start で開始してください。", delete_after=5.0)
@@ -154,6 +206,9 @@ class CommandHandler:
                 await ctx.message.delete()
             except:
                 pass  # 削除できない場合は無視
+            
+            # コマンドボタンを更新
+            await self.update_command_buttons(ctx.guild.id)
     
     async def handle_answer_command(self, ctx):
         """/answerコマンドの処理"""
@@ -190,6 +245,10 @@ class CommandHandler:
         # ゲームチャンネルに正解を送信
         await self.send_to_game_channel(ctx, answer_msg)
         
+        # 正解発表後にゲーム状態を更新（次の問題の準備）
+        game_state["current_song_id"] = None
+        game_state["question_sent"] = False
+        
         # コマンドボタンを再表示
         command_view = self.create_command_buttons()
         await ctx.send("正解をゲームチャンネルに送信しました。コマンドボタンを使用してください。", view=command_view, delete_after=5.0)
@@ -199,6 +258,9 @@ class CommandHandler:
             await ctx.message.delete()
         except:
             pass  # 削除できない場合は無視
+        
+        # コマンドボタンを更新
+        await self.update_command_buttons(ctx.guild.id)
     
     async def handle_score_command(self, ctx):
         """/scoreコマンドの処理"""
@@ -261,4 +323,47 @@ class CommandHandler:
         try:
             await ctx.message.delete()
         except:
-            pass  # 削除できない場合は無視 
+            pass  # 削除できない場合は無視
+        
+        # コマンドボタンを更新
+        await self.update_command_buttons(ctx.guild.id)
+    
+    async def update_command_buttons(self, guild_id):
+        """コマンドチャンネルのボタンを更新"""
+        if self.command_guild_id is None or self.command_channel_id is None:
+            return
+        
+        try:
+            command_guild = self.bot.get_guild(self.command_guild_id)
+            if command_guild:
+                command_channel = command_guild.get_channel(self.command_channel_id)
+                if command_channel:
+                    # 最新のメッセージを取得
+                    async for message in command_channel.history(limit=10):
+                        # ボタンが含まれているメッセージを探す
+                        if message.components:
+                            # ゲーム状態を判定
+                            game_guild_id = self.game_guild_id or guild_id
+                            is_question_active = self.game_manager.is_question_active(game_guild_id)
+                            is_waiting_answer = self.game_manager.is_waiting_for_answer(game_guild_id)
+                            is_game_active = self.game_manager.is_game_active(game_guild_id)
+                            
+                            if is_question_active:
+                                # 問題出題中は全てのボタンを無効化
+                                new_view = self.create_command_buttons_disabled()
+                                await message.edit(content=message.content, view=new_view)
+                            elif is_waiting_answer:
+                                # 回答時間終了後で正解未発表の状態は出題ボタンも無効化
+                                new_view = self.create_command_buttons_waiting_answer()
+                                await message.edit(content=message.content, view=new_view)
+                            elif is_game_active:
+                                # ゲーム進行中は開始ボタンのみ無効化
+                                new_view = self.create_command_buttons_game_active()
+                                await message.edit(content=message.content, view=new_view)
+                            else:
+                                # ゲーム開始前は全てのボタンを有効化
+                                new_view = self.create_command_buttons()
+                                await message.edit(content=message.content, view=new_view)
+                            break
+        except Exception as e:
+            print(f"コマンドボタン更新エラー: {e}") 
