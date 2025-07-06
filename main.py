@@ -77,22 +77,12 @@ async def on_interaction(interaction: discord.Interaction):
                 await interaction.response.send_message("このチャンネルではコマンドを実行できません。", ephemeral=True)
                 return
             
-            # 問題出題中かどうかをチェック
-            game_guild_id = GAME_GUILD_ID or interaction.guild.id
-            if game_manager.is_question_active(game_guild_id):
-                await interaction.response.send_message("現在問題が出題中です。回答時間が終了するまでお待ちください。", ephemeral=True)
-                return
-            
-            # 回答時間終了後で正解未発表の状態かどうかをチェック
-            if game_manager.is_waiting_for_answer(game_guild_id):
-                await interaction.response.send_message("回答時間が終了しました。正解を発表してから次の問題を出題してください。", ephemeral=True)
-                return
-            
             # コマンドの実行
             command = custom_id.replace("cmd_", "")
+            game_guild_id = GAME_GUILD_ID or interaction.guild.id
+            
             if command == "start":
                 # ゲーム開始処理
-                game_guild_id = GAME_GUILD_ID or interaction.guild.id
                 
                 # ゲーム進行中かどうかをチェック
                 if game_manager.is_game_active(game_guild_id):
@@ -127,7 +117,17 @@ async def on_interaction(interaction: discord.Interaction):
                 
             elif command == "next":
                 # 次の問題出題処理
-                game_guild_id = GAME_GUILD_ID or interaction.guild.id
+                
+                # 問題出題中かどうかをチェック
+                if game_manager.is_question_active(game_guild_id):
+                    await interaction.response.send_message("現在問題が出題中です。回答時間が終了するまでお待ちください。", ephemeral=True)
+                    return
+                
+                # 回答時間終了後で正解未発表の状態かどうかをチェック
+                if game_manager.is_waiting_for_answer(game_guild_id):
+                    await interaction.response.send_message("回答時間が終了しました。正解を発表してから次の問題を出題してください。", ephemeral=True)
+                    return
+                
                 if not game_manager.get_game_state(game_guild_id):
                     await interaction.response.send_message("現在アクティブなゲームはありません。/start で開始してください。", ephemeral=True, delete_after=5.0)
                     return
@@ -155,7 +155,6 @@ async def on_interaction(interaction: discord.Interaction):
                 
             elif command == "answer":
                 # 正解発表処理
-                game_guild_id = GAME_GUILD_ID or interaction.guild.id
                 if not game_manager.get_game_state(game_guild_id):
                     await interaction.response.send_message("現在アクティブなゲームはありません。", ephemeral=True)
                     return
@@ -168,6 +167,9 @@ async def on_interaction(interaction: discord.Interaction):
                 # 正解情報を取得
                 correct_title = game_state.get("correct_answer_title", "不明")
                 correct_artist = game_state.get("correct_answer_artist", "不明")
+                
+                # 正解発表をコンソールに出力
+                game_manager.log_answer(game_guild_id, correct_title, correct_artist)
                 
                 # 正解メッセージを作成
                 answer_msg = f"**正解発表！**\n"
@@ -184,11 +186,13 @@ async def on_interaction(interaction: discord.Interaction):
                 game_state["current_song_id"] = None
                 game_state["question_sent"] = False
                 
+                # コマンドボタンを更新（確実に実行）
+                await command_handler.update_command_buttons(game_guild_id)
+                
                 await interaction.response.send_message("正解をゲームチャンネルに送信しました。", ephemeral=True, delete_after=5.0)
                 
             elif command == "score":
                 # スコア表示処理
-                game_guild_id = GAME_GUILD_ID or interaction.guild.id
                 if not game_manager.get_game_state(game_guild_id):
                     await interaction.response.send_message("現在アクティブなゲームはありません。", ephemeral=True, delete_after=5.0)
                     return

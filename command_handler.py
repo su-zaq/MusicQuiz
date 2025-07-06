@@ -237,6 +237,9 @@ class CommandHandler:
         correct_title = game_state.get("correct_answer_title", "不明")
         correct_artist = game_state.get("correct_answer_artist", "不明")
         
+        # 正解発表をコンソールに出力
+        self.game_manager.log_answer(game_guild_id, correct_title, correct_artist)
+        
         # 正解メッセージを作成
         answer_msg = f"**正解発表！**\n"
         answer_msg += f"曲名: {correct_title}\n"
@@ -259,7 +262,7 @@ class CommandHandler:
         except:
             pass  # 削除できない場合は無視
         
-        # コマンドボタンを更新
+        # コマンドボタンを更新（確実に実行）
         await self.update_command_buttons(ctx.guild.id)
     
     async def handle_score_command(self, ctx):
@@ -347,6 +350,8 @@ class CommandHandler:
                             is_question_active = self.game_manager.is_question_active(game_guild_id)
                             is_waiting_answer = self.game_manager.is_waiting_for_answer(game_guild_id)
                             is_game_active = self.game_manager.is_game_active(game_guild_id)
+                            
+                            print(f"ボタン更新: question_active={is_question_active}, waiting_answer={is_waiting_answer}, game_active={is_game_active}")
                             
                             if is_question_active:
                                 # 問題出題中は全てのボタンを無効化

@@ -47,6 +47,13 @@ class GameManager:
             "answering_lock": True,
             "question_sent": False
         }
+        
+        # ゲーム開始をコンソールに出力
+        print(f"=== ゲーム開始 ===")
+        print(f"サーバーID: {guild_id}")
+        print(f"参加者数: {len([m for m in members if not m.bot])}")
+        print(f"総ラウンド数: {self.rounds}")
+        print("=" * 20)
     
     async def next_question(self, game_guild_id, game_channel, game_state):
         """次の問題を出題"""
@@ -54,6 +61,13 @@ class GameManager:
             # ゲーム終了処理
             await game_channel.send("**--- クイズ終了！ ---**")
             game_state["game_ended"] = True
+            
+            # ゲーム終了をコンソールに出力
+            print(f"=== ゲーム終了 ===")
+            print(f"サーバーID: {game_guild_id}")
+            print(f"最終ラウンド: {game_state['round']}")
+            print("=" * 20)
+            
             return False
         
         try:
@@ -94,6 +108,13 @@ class GameManager:
 
         # ラウンド開始メッセージ
         await game_channel.send(f"**--- 第{game_state['round']+1}ラウンド ---**")
+        
+        # コンソールに曲情報を出力
+        print(f"=== 第{game_state['round']+1}ラウンド出題 ===")
+        print(f"曲名: {game_state['correct_answer_title']}")
+        print(f"アーティスト: {game_state['correct_answer_artist']}")
+        print(f"ファイルパス: {game_state['file_path']}")
+        print("=" * 30)
 
         # 音声ファイル送信
         try:
@@ -219,4 +240,11 @@ class GameManager:
             del self.active_games[guild_id]
             # ゲーム終了時にコマンドボタンを更新
             if self.command_handler:
-                asyncio.create_task(self.command_handler.update_command_buttons(guild_id)) 
+                asyncio.create_task(self.command_handler.update_command_buttons(guild_id))
+    
+    def log_answer(self, guild_id, correct_title, correct_artist):
+        """正解発表をコンソールに出力"""
+        print(f"=== 正解発表 ===")
+        print(f"曲名: {correct_title}")
+        print(f"アーティスト: {correct_artist}")
+        print("=" * 20) 
